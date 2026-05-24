@@ -68,5 +68,12 @@
 	},
 	"keywords": [
 		"svelte"
-	]
+	],
+	"dependencies": {
+		"bits-ui": "^2.18.1",
+		"clsx": "^2.1.1",
+		"tailwind-merge": "^3.6.0",
+		"temporal-polyfill": "^0.3.2",
+		"zod": "^4.4.3"
+	}
 }
