@@ -25,6 +25,7 @@ export type PortedItem = {
 		/** Label for tooltips and lists. */
 		label: string;
 	};
+	hideFromFAB?: boolean;
 };
 
 /** Registry of currently invisible items available in the FAB. */
@@ -39,9 +40,10 @@ export function getPortedElements() {
 export function addToPortedElements(
 	key: string,
 	element: HTMLElement,
-	metadata: PortedItem['metadata']
+	metadata: PortedItem['metadata'],
+	hideFromFAB?: boolean
 ) {
-	portedElements.set(key, { element, metadata });
+	portedElements.set(key, { element, metadata, hideFromFAB });
 	return key;
 }
 
@@ -76,6 +78,7 @@ export function clearDockElements() {
 export class Portable {
 	key: string;
 	metadata: PortedItem['metadata'];
+	hideFromFAB?: boolean;
 
 	// State for binding
 	wrapper = $state<HTMLElement | null>(null);
@@ -84,9 +87,14 @@ export class Portable {
 	// Internal state
 	isIntersecting = $state(true);
 
-	constructor(key: string, metadata: PortedItem['metadata'], options?: { alwaysPorted?: boolean }) {
+	constructor(
+		key: string,
+		metadata: PortedItem['metadata'],
+		options?: { alwaysPorted?: boolean; hideFromFAB?: boolean }
+	) {
 		this.key = key;
 		this.metadata = metadata;
+		this.hideFromFAB = options?.hideFromFAB;
 
 		if (options?.alwaysPorted) {
 			this.isIntersecting = false;
@@ -110,7 +118,7 @@ export class Portable {
 		// Porting Logic Effect
 		$effect.pre(() => {
 			if (!this.isIntersecting && this.content) {
-				addToPortedElements(this.key, this.content, this.metadata);
+				addToPortedElements(this.key, this.content, this.metadata, this.hideFromFAB);
 			} else {
 				removeFromPortedElement(this.key);
 			}
@@ -133,3 +141,20 @@ export class Portable {
 		return this.wrapper;
 	}
 }
+
+class PortableState {
+	openDrawer = $state(false);
+	currentKey = $state<string | null>(null);
+
+	open(key: string) {
+		this.currentKey = key;
+		this.openDrawer = true;
+	}
+
+	close() {
+		this.openDrawer = false;
+		this.currentKey = null;
+	}
+}
+
+export const portableState = new PortableState();

@@ -3,7 +3,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { untrack, type Snippet } from 'svelte';
 	import CloseIcon from '../icons/CloseIcon.svelte';
-	import { getDrawerState } from './drawer-state.svelte';
+	import { getDrawerState } from './drawer-state.svelte.ts';
 
 	type Placement =
 		| 'center'
@@ -163,11 +163,11 @@
 						>
 							<div class="h-1.5 w-[100px] shrink-0 rounded-full bg-gray-400 dark:bg-gray-600"></div>
 						</div>
-						<div class="hidden justify-end px-4 pt-4 min-[650px]:flex">
+						<div class="flex justify-end px-4 py-2">
 							<Dialog.Close
-								class="rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 hover:ring-2 hover:ring-offset-2 focus:ring-ring focus:outline-none disabled:pointer-events-none data-[state=open]:text-muted-foreground"
+								class="ring-offset-background focus:ring-ring data-[state=open]:text-muted-foreground rounded-sm opacity-70 transition-opacity hover:opacity-100 hover:ring-2 hover:ring-offset-2 focus:outline-none disabled:pointer-events-none"
 							>
-								<CloseIcon class="h-4 w-4" />
+								<CloseIcon class="h-8 w-8" />
 								<span class="sr-only">Close</span>
 							</Dialog.Close>
 						</div>

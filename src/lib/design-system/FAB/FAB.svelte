@@ -3,7 +3,12 @@
 	import Button from '../Button.svelte';
 	import List from '../List.svelte';
 	import Drawer from '../Drawer/Drawer.svelte';
-	import { getPortedElements, addToDockPort, clearDockElements } from './portable.svelte';
+	import {
+		getPortedElements,
+		addToDockPort,
+		clearDockElements,
+		portableState
+	} from './portable.svelte';
 	import DotsThree from '../icons/DotsThree.svelte';
 	import { fly } from 'svelte/transition';
 	import { getDrawerState } from '../Drawer/drawer-state.svelte';
@@ -11,30 +16,28 @@
 	const drawerState = getDrawerState();
 
 	let portedElements = $derived(getPortedElements());
-	// Convert to array
+	// Convert to array and filter out elements hidden from FAB
 	let items = $derived(
-		Array.from(portedElements.entries()).map(([key, value]) => ({ key, ...value }))
+		Array.from(portedElements.entries())
+			.filter(([, value]) => !value.hideFromFAB)
+			.map(([key, value]) => ({ key, ...value }))
 	);
 
 	let activeElementDock = $state<HTMLElement | null>(null);
-	let openDrawer = $state(false);
 
 	// Logic for single item
 	let singleItem = $derived(items.length === 1 ? items[0] : null);
-	let currentKey = $state<string | null>(null);
 
 	function openItem(key: string) {
-		currentKey = key;
-		openDrawer = true;
+		portableState.open(key);
 	}
 
 	$effect(() => {
-		if (openDrawer && activeElementDock && currentKey) {
+		if (portableState.openDrawer && activeElementDock && portableState.currentKey) {
 			clearDockElements();
-			addToDockPort(currentKey, activeElementDock);
-		} else if (!openDrawer) {
+			addToDockPort(portableState.currentKey, activeElementDock);
+		} else if (!portableState.openDrawer) {
 			clearDockElements();
-			currentKey = null;
 		}
 	});
 </script>
@@ -59,7 +62,7 @@
 													{...tooltipProps}
 													{...popoverProps}
 													size="icon"
-													class="bg-tan-100/80 text-fg hover:bg-tan-100/95 dark:bg-bg/80 dark:hover:bg-bg/95 h-14 w-14 rounded-2xl border border-border/40 shadow-lg transition-all"
+													class="border-border/40 bg-tan-100/80 text-fg hover:bg-tan-100/95 dark:bg-bg/80 dark:hover:bg-bg/95 h-14 w-14 rounded-2xl border shadow-lg transition-all"
 												>
 													<DotsThree class="h-6 w-6" />
 												</Button>
@@ -69,14 +72,14 @@
 								</Popover.Trigger>
 								<Tooltip.Content side="left" sideOffset={8}>
 									<div
-										class="bg-bg text-fg rounded border border-border px-2 py-1 text-xs shadow-sm"
+										class="border-border bg-bg text-fg rounded border px-2 py-1 text-xs shadow-sm"
 									>
 										Options
 									</div>
 								</Tooltip.Content>
 							</Tooltip.Root>
 							<Popover.Content
-								class="z-50 w-56 rounded-lg border border-border bg-card/70 p-0 shadow-xl"
+								class="border-border bg-card/70 z-50 w-56 rounded-lg border p-0 shadow-xl"
 								sideOffset={8}
 								collisionPadding={{
 									right: 8
@@ -89,7 +92,7 @@
 											onclick={() => openItem(item.key)}
 										>
 											<div
-												class="flex h-8 w-8 items-center justify-center rounded-full bg-muted/20"
+												class="bg-muted/20 flex h-8 w-8 items-center justify-center rounded-full"
 											>
 												<item.metadata.icon class="h-4 w-4" />
 											</div>
@@ -107,7 +110,7 @@
 										{...props}
 										size="icon"
 										onclick={() => openItem(singleItem!.key)}
-										class="bg-tan-100/80 text-fg hover:bg-tan-100/95 dark:bg-bg/80 dark:hover:bg-bg/95 h-14 w-14 rounded-2xl border border-border/40 shadow-lg transition-all"
+										class="border-border/40 bg-tan-100/80 text-fg hover:bg-tan-100/95 dark:bg-bg/80 dark:hover:bg-bg/95 h-14 w-14 rounded-2xl border shadow-lg transition-all"
 									>
 										<singleItem.metadata.icon class="h-6 w-6" />
 									</Button>
@@ -115,7 +118,7 @@
 							</Tooltip.Trigger>
 							<Tooltip.Content side="left" align="center" sideOffset={8}>
 								<div
-									class="bg-tan-100/80 text-fg dark:bg-bg/80 rounded border border-border px-2 py-1 text-xs shadow-sm"
+									class="border-border bg-tan-100/80 text-fg dark:bg-bg/80 rounded border px-2 py-1 text-xs shadow-sm"
 								>
 									{singleItem?.metadata.label}
 								</div>
@@ -126,8 +129,8 @@
 			</Tooltip.Provider>
 		</Portal>
 	{/if}
-
-	<Drawer bind:open={openDrawer}>
-		<div bind:this={activeElementDock} class="h-full w-full"></div>
-	</Drawer>
 {/if}
+
+<Drawer bind:open={portableState.openDrawer}>
+	<div bind:this={activeElementDock} class="h-full w-full"></div>
+</Drawer>
