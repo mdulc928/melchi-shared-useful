@@ -1,0 +1,252 @@
+{
+	"name": "gbts",
+	"displayName": "Git Branch Tasks (GBTS)",
+	"description": "Track branch objectives and automated code TODO comments per Git branch.",
+	"version": "0.5.4",
+	"publisher": "antigravity",
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": [
+		"Other",
+		"Productivity"
+	],
+	"main": "./dist/extension.js",
+	"activationEvents": [
+		"onWebviewPanel:gbts.dashboard",
+		"onStartupFinished"
+	],
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "gbts-container",
+					"title": "Git Branch Tasks",
+					"icon": "media/icon.svg"
+				}
+			]
+		},
+		"views": {
+			"gbts-container": [
+				{
+					"id": "gbts.taskExplorer",
+					"name": "Branch Tasks"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "gbts.addObjective",
+				"title": "GBTS: Add Branch Objective",
+				"icon": "$(add)"
+			},
+			{
+				"command": "gbts.toggleObjective",
+				"title": "Toggle Objective Done/Pending",
+				"icon": "$(check)"
+			},
+			{
+				"command": "gbts.editObjective",
+				"title": "Edit Objective",
+				"icon": "$(edit)"
+			},
+			{
+				"command": "gbts.deleteObjective",
+				"title": "Delete Objective",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "gbts.popout",
+				"title": "Pop Out Tasks to Window / Tab",
+				"icon": "$(link-external)"
+			},
+			{
+				"command": "gbts.setScope",
+				"title": "Switch Scan Scope (Branch / Project / Unpushed / Uncommitted)",
+				"icon": "$(filter)"
+			},
+			{
+				"command": "gbts.insertTodoComment",
+				"title": "GBTS: Insert Branch TODO Comment",
+				"icon": "$(comment)"
+			},
+			{
+				"command": "gbts.jumpToLine",
+				"title": "Jump to Code Location",
+				"icon": "$(go-to-file)"
+			},
+			{
+				"command": "gbts.copyAsMarkdown",
+				"title": "Copy Tasks as Markdown",
+				"icon": "$(clippy)"
+			},
+			{
+				"command": "gbts.toggleGrouping",
+				"title": "Switch Grouping (File / Prefix / Flat)",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "gbts.refresh",
+				"title": "Refresh Tasks",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "gbts.openSettings",
+				"title": "Configure GBTS Settings",
+				"icon": "$(gear)"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "gbts.addObjective",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@1"
+				},
+				{
+					"command": "gbts.popout",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@2"
+				},
+				{
+					"command": "gbts.setScope",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@3"
+				},
+				{
+					"command": "gbts.toggleGrouping",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@4"
+				},
+				{
+					"command": "gbts.copyAsMarkdown",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@5"
+				},
+				{
+					"command": "gbts.refresh",
+					"when": "view == gbts.taskExplorer",
+					"group": "navigation@6"
+				},
+				{
+					"command": "gbts.openSettings",
+					"when": "view == gbts.taskExplorer",
+					"group": "1_actions@1"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "gbts.toggleObjective",
+					"when": "view == gbts.taskExplorer && viewItem == objectiveItem",
+					"group": "inline@1"
+				},
+				{
+					"command": "gbts.editObjective",
+					"when": "view == gbts.taskExplorer && viewItem == objectiveItem",
+					"group": "inline@2"
+				},
+				{
+					"command": "gbts.deleteObjective",
+					"when": "view == gbts.taskExplorer && viewItem == objectiveItem",
+					"group": "inline@3"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "gbts.insertTodoComment",
+					"group": "7_modification@1"
+				}
+			]
+		},
+		"keybindings": [
+			{
+				"command": "gbts.insertTodoComment",
+				"key": "ctrl+shift+t",
+				"mac": "cmd+shift+t",
+				"when": "editorTextFocus"
+			}
+		],
+		"configuration": {
+			"title": "Git Branch Tasks (GBTS)",
+			"properties": {
+				"gbts.defaultScope": {
+					"type": "string",
+					"enum": [
+						"branch",
+						"project",
+						"unpushed",
+						"uncommitted"
+					],
+					"enumDescriptions": [
+						"🌿 Branch Diff: Tasks added on current branch vs base branch",
+						"🌐 All Project: All active TODOs in the repository",
+						"🚀 Unpushed: Tasks in local unpushed commits",
+						"📝 Uncommitted: Tasks in working tree only"
+					],
+					"default": "branch",
+					"description": "Default scanning scope when opening a repository."
+				},
+				"gbts.todoPrefixes": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [
+						"TODO",
+						"FIXME",
+						"NOTE",
+						"HACK",
+						"BUG",
+						"XXX",
+						"REVIEW"
+					],
+					"description": "List of comment tags/prefixes detected as task items."
+				},
+				"gbts.baseBranch": {
+					"type": "string",
+					"default": "",
+					"description": "Base branch to compare against (leave empty to auto-detect main/master/origin/HEAD)."
+				},
+				"gbts.includeUncommitted": {
+					"type": "boolean",
+					"default": true,
+					"description": "Include uncommitted (staged and unstaged) TODO comments in the current working tree."
+				},
+				"gbts.groupBy": {
+					"type": "string",
+					"enum": [
+						"file",
+						"prefix",
+						"flat"
+					],
+					"enumDescriptions": [
+						"Group items by file path",
+						"Group items by prefix tag (TODO, FIXME, etc.)",
+						"Show all items in a flat list"
+					],
+					"default": "file",
+					"description": "How to group branch tasks in the sidebar."
+				},
+				"gbts.showGutterDecorations": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show pin/warning markers in the editor gutter on lines with TODO comments."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run build",
+		"compile": "tsc -p ./",
+		"watch": "tsc -watch -p ./",
+		"build": "node esbuild.js",
+		"package": "vsce package --no-dependencies"
+	},
+	"devDependencies": {
+		"@types/node": "^20.11.24",
+		"@types/vscode": "^1.85.0",
+		"@vscode/vsce": "^2.24.0",
+		"esbuild": "^0.20.1",
+		"typescript": "^5.3.3"
+	}
+}
