@@ -1,0 +1,14 @@
+{
+	"name": "@melchi/artifact-staging",
+	"version": "1.0.0",
+	"description": "Artifact-first staging workflow skill and staged-diff CLI tool for Antigravity IDE",
+	"type": "module",
+	"bin": {
+		"staged-diff": "./scripts/staged-diff"
+	},
+	"files": [
+		"SKILL.md",
+		"scripts/staged-diff",
+		"README.md"
+	]
+}

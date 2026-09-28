@@ -1,0 +1,678 @@
+#!/usr/bin/env python3
+"""
+staged-diff: Universal side-by-side diff launcher and staging manager for Antigravity IDE.
+Repo-aware & Session-smart:
+  - Automatically isolates staged sessions to the current Git repository / workspace.
+  - Automatically selects the session with the most recent diffs (latest file edit).
+  - Displays any other active sessions for the same repository and allows easy switching.
+"""
+
+import os
+import sys
+import json
+import glob
+import shutil
+import subprocess
+import re
+import time
+import filecmp
+
+HOME = os.path.expanduser("~")
+BRAIN_DIR = os.path.join(HOME, ".gemini/antigravity-ide/brain")
+IDE_BIN = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
+
+def colorize(text, color_code):
+    if sys.stdout.isatty():
+        return f"\033[{color_code}m{text}\033[0m"
+    return text
+
+def is_file_equal(path1, path2):
+    if not (path1 and path2 and os.path.isfile(path1) and os.path.isfile(path2)):
+        return False
+    try:
+        if filecmp.cmp(path1, path2, shallow=False):
+            return True
+        with open(path1, "r", encoding="utf-8", errors="replace") as f1, \
+             open(path2, "r", encoding="utf-8", errors="replace") as f2:
+            c1 = f1.read().replace("\r\n", "\n").rstrip()
+            c2 = f2.read().replace("\r\n", "\n").rstrip()
+            if c1 == c2:
+                return True
+            lines1 = [l.strip() for l in c1.splitlines() if l.strip()]
+            lines2 = [l.strip() for l in c2.splitlines() if l.strip()]
+            return lines1 == lines2
+    except Exception:
+        return False
+
+def get_git_root(path):
+    try:
+        res = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True
+        )
+        out = os.path.realpath(res.stdout.strip())
+        if out == os.path.realpath(HOME):
+            return None
+        return out
+    except Exception:
+        return None
+
+def format_relative_time(ts):
+    now = time.time()
+    diff = max(0, now - ts)
+    if diff < 60:
+        return "just now"
+    elif diff < 3600:
+        m = int(diff / 60)
+        return f"{m}m ago"
+    elif diff < 86400:
+        h = int(diff / 3600)
+        return f"{h}h ago"
+    else:
+        d = int(diff / 86400)
+        return f"{d}d ago"
+
+def get_staging_latest_mtime(staging_dir):
+    latest = os.path.getmtime(staging_dir)
+    for root, _, files in os.walk(staging_dir):
+        for f in files:
+            if not f.endswith(".metadata.json"):
+                try:
+                    f_mtime = os.path.getmtime(os.path.join(root, f))
+                    if f_mtime > latest:
+                        latest = f_mtime
+                except Exception:
+                    pass
+    return latest
+
+def get_workspace_for_conv(conv_dir):
+    for cand in [os.path.join(conv_dir, ".workspace"), os.path.join(conv_dir, "staging", ".workspace"), os.path.join(conv_dir, "workspace.json")]:
+        if os.path.isfile(cand):
+            try:
+                with open(cand, "r") as f:
+                    content = f.read().strip()
+                    if content.startswith("{"):
+                        data = json.loads(content)
+                        ws = data.get("workspace") or data.get("git_root")
+                        if ws:
+                            return os.path.realpath(ws)
+                    elif content:
+                        return os.path.realpath(content)
+            except Exception:
+                pass
+
+    transcript_path = os.path.join(conv_dir, ".system_generated", "logs", "transcript.jsonl")
+    if os.path.isfile(transcript_path):
+        try:
+            with open(transcript_path, "r", errors="ignore") as f:
+                for _ in range(60):
+                    line = f.readline()
+                    if not line:
+                        break
+                    if "Active Document:" in line:
+                        m = re.search(r"Active Document:\s*([^\s\"']+)", line)
+                        if m:
+                            doc_path = m.group(1)
+                            root = get_git_root(os.path.dirname(doc_path))
+                            if root:
+                                return root
+                    if "[URI] -> [CorpusName]:" in line:
+                        m = re.search(r"(\/[^\s]+)\s*->", line)
+                        if m:
+                            root = get_git_root(m.group(1))
+                            if root:
+                                return root
+        except Exception:
+            pass
+    return None
+
+def collect_staged_files(staging_dir):
+    staged_files = []
+    if not os.path.isdir(staging_dir):
+        return staged_files
+    for root, _, files in os.walk(staging_dir):
+        for f in files:
+            if f.startswith(".") or f.endswith(".metadata.json") or f == "renames.json":
+                continue
+            full_path = os.path.join(root, f)
+            rel_path = os.path.relpath(full_path, staging_dir)
+            staged_files.append((rel_path, full_path))
+    return staged_files
+
+def load_renames_manifest(conv_dir, staging_dir):
+    for candidate in [os.path.join(conv_dir, "renames.json"), os.path.join(staging_dir, "renames.json")]:
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r") as f:
+                    return json.load(f), candidate
+            except Exception as e:
+                print(f"Warning: Failed to parse {candidate}: {e}", file=sys.stderr)
+    return {}, None
+
+def save_renames_manifest(manifest_path, renames):
+    with open(manifest_path, "w") as f:
+        json.dump(renames, f, indent=2)
+
+def find_staging_sessions(cwd):
+    repo_root = get_git_root(cwd)
+    pattern = os.path.join(BRAIN_DIR, "*", "staging")
+    staging_dirs = glob.glob(pattern)
+
+    sessions = []
+    for s_dir in staging_dirs:
+        c_dir = os.path.dirname(s_dir)
+        c_id = os.path.basename(c_dir)
+        files = collect_staged_files(s_dir)
+        if not files:
+            continue
+
+        ws = get_workspace_for_conv(c_dir)
+        is_match = False
+        if repo_root and ws:
+            ws_root = get_git_root(ws) or ws
+            if ws_root == repo_root or ws == repo_root:
+                is_match = True
+            else:
+                is_match = False
+        elif repo_root and not ws:
+            renames_map, _ = load_renames_manifest(c_dir, s_dir)
+            matching_count = 0
+            for rel, _ in files:
+                orig = renames_map.get(rel, rel)
+                if os.path.isfile(os.path.join(repo_root, orig)) or os.path.isfile(os.path.join(repo_root, rel)):
+                    matching_count += 1
+            if matching_count >= 2:
+                is_match = True
+
+        if is_match:
+            latest_mtime = get_staging_latest_mtime(s_dir)
+            sessions.append({
+                "conv_id": c_id,
+                "conv_dir": c_dir,
+                "staging_dir": s_dir,
+                "latest_mtime": latest_mtime,
+                "files_count": len(files),
+                "workspace": ws or repo_root
+            })
+
+    # Sort descending by latest edit timestamp (most recent first)
+    sessions.sort(key=lambda s: s["latest_mtime"], reverse=True)
+    return repo_root, sessions
+
+def list_all_staging_sessions():
+    pattern = os.path.join(BRAIN_DIR, "*", "staging")
+    staging_dirs = glob.glob(pattern)
+    if not staging_dirs:
+        print("No staging sessions found.")
+        return
+
+    print("Active Staging Sessions Across All Projects:")
+    found = False
+    for s_dir in sorted(staging_dirs, key=get_staging_latest_mtime, reverse=True):
+        c_dir = os.path.dirname(s_dir)
+        c_id = os.path.basename(c_dir)
+        ws = get_workspace_for_conv(c_dir) or "Unknown Workspace"
+        files = collect_staged_files(s_dir)
+        if not files:
+            continue
+        found = True
+        latest_time_str = format_relative_time(get_staging_latest_mtime(s_dir))
+        print(f"  • Session:    {c_id}")
+        print(f"    Repository: {ws}")
+        print(f"    Last Edit:  {latest_time_str} ({len(files)} file(s))\n")
+    if not found:
+        print("  (No active sessions with staged files found)")
+
+def resolve_workspace_pair(cwd, rel_path, renames_map, staging_dir=None):
+    if rel_path == "_deletions":
+        return None, "IGNORED", ""
+
+    staged_abs = os.path.join(staging_dir, rel_path) if staging_dir else None
+
+    # 1. Explicit renames manifest
+    if rel_path in renames_map:
+        orig_rel = renames_map[rel_path]
+        orig_abs = os.path.join(cwd, orig_rel)
+        dest_abs = os.path.join(cwd, rel_path)
+        orig_info = f" (orig: {orig_rel})" if orig_rel != rel_path else ""
+
+        # Check if already applied (destination exists in workspace and matches staged content)
+        if os.path.isfile(dest_abs):
+            if staged_abs and is_file_equal(staged_abs, dest_abs):
+                return dest_abs, "APPLIED", orig_info
+
+        if os.path.isfile(orig_abs):
+            status = "RENAMED" if os.path.basename(orig_rel) != os.path.basename(rel_path) else "RELOCATED"
+            return orig_abs, status, orig_info
+
+        if os.path.isfile(dest_abs):
+            return dest_abs, "MODIFIED", orig_info
+
+    # 2. Direct match at cwd + rel_path
+    direct = os.path.join(cwd, rel_path)
+    if os.path.isfile(direct):
+        if staged_abs and is_file_equal(staged_abs, direct):
+            return direct, "APPLIED", ""
+        return direct, "MODIFIED", ""
+
+    # 3. Fallback basename search if uniquely identifiable in same feature
+    basename = os.path.basename(rel_path)
+    rel_dir = os.path.dirname(rel_path)
+    candidates = []
+    search_dir = os.path.join(cwd, os.path.dirname(rel_dir)) if rel_dir else cwd
+    if os.path.isdir(search_dir):
+        for root, _, files in os.walk(search_dir):
+            if any(ignored in root for ignored in ["node_modules", ".git", ".svelte-kit", "build", "dist"]):
+                continue
+            for f in files:
+                if f == basename:
+                    candidates.append(os.path.join(root, f))
+
+    if len(candidates) == 1:
+        cand = candidates[0]
+        orig_info = f" (orig: {os.path.relpath(cand, cwd)})"
+        if staged_abs and is_file_equal(staged_abs, cand):
+            return cand, "APPLIED", orig_info
+        return cand, "RELOCATED", orig_info
+
+    return None, "NEW FILE", ""
+
+def apply_staged_file(cwd, staging_dir, rel_path, renames_map):
+    staged_abs = os.path.join(staging_dir, rel_path)
+    ws_dest = os.path.join(cwd, rel_path)
+    if not os.path.isfile(staged_abs):
+        print(f"Error: Staged file not found: {staged_abs}", file=sys.stderr)
+        return False
+
+    already_applied = os.path.isfile(ws_dest) and is_file_equal(staged_abs, ws_dest)
+
+    os.makedirs(os.path.dirname(ws_dest), exist_ok=True)
+    shutil.copy2(staged_abs, ws_dest)
+    if already_applied:
+        print(f"  [APPLIED] {rel_path} (already up to date)")
+    else:
+        print(f"  [APPLIED] {rel_path}")
+
+    # Remove old file if it was renamed or relocated
+    if rel_path in renames_map:
+        orig_rel = renames_map[rel_path]
+        if orig_rel != rel_path:
+            orig_ws = os.path.join(cwd, orig_rel)
+            if os.path.isfile(orig_ws):
+                os.remove(orig_ws)
+                print(f"  [REMOVED OLD] {orig_rel}")
+    return True
+
+def install_zsh_completion():
+    zfunc_dir = os.path.join(HOME, ".zfunc")
+    os.makedirs(zfunc_dir, exist_ok=True)
+    completion_file = os.path.join(zfunc_dir, "_staged-diff")
+
+    script_content = """#compdef staged-diff
+
+_staged-diff() {
+    local -a completions targets files apply_options session_options
+    local line
+
+    if (( CURRENT == 2 )); then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && completions+=("$line")
+        done < <(staged-diff --complete 2>/dev/null)
+        _describe -t targets 'staged files & commands' completions
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "apply" ]]; then
+        apply_options=("-f:Specify staged file to apply" "--file:Specify staged file to apply" "all:Apply all staged files and remove obsolete files")
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged-diff --list 2>/dev/null)
+        _describe -t options 'apply options' apply_options
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "apply" ]] && [[ "${words[3]}" == "-f" || "${words[3]}" == "--file" || "${words[3]}" == "--f" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged-diff --list 2>/dev/null)
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "rename" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged-diff --list 2>/dev/null)
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "rename" ]]; then
+        _files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "-s" || "${words[2]}" == "--session" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && session_options+=("$line")
+        done < <(staged-diff --complete-sessions 2>/dev/null)
+        _describe -t sessions 'available sessions' session_options
+    fi
+}
+
+_staged-diff "$@"
+"""
+    with open(completion_file, "w") as f:
+        f.write(script_content)
+    print(f"Installed zsh completion to {completion_file}")
+
+def main():
+    cwd = os.getcwd()
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "--install-completion":
+        install_zsh_completion()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] in ("--all-repos", "-a"):
+        list_all_staging_sessions()
+        return
+
+    repo_root, sessions = find_staging_sessions(cwd)
+
+    # Session completion helper
+    if len(sys.argv) >= 2 and sys.argv[1] == "--complete-sessions":
+        for s in sessions:
+            c_id = s["conv_id"]
+            m_str = format_relative_time(s["latest_mtime"])
+            print(f"{c_id}:{s['files_count']} files ({m_str})")
+        return
+
+    # Check for session override flag: -s <id>, --session <id>, or --conv <id>
+    conv_id_override = None
+    args = sys.argv[1:]
+    for flag in ("-s", "--session", "--conv", "-c"):
+        if flag in args:
+            idx = args.index(flag)
+            if idx + 1 < len(args):
+                conv_id_override = args[idx + 1]
+                del args[idx:idx + 2]
+                break
+
+    if len(args) >= 1 and args[0] in ("--sessions", "-s"):
+        if not sessions:
+            print(f"No staging sessions found for repository: {repo_root or cwd}")
+            return
+        print(f"Active Staging Sessions for {repo_root}:")
+        for i, s in enumerate(sessions):
+            tag = " (most recent)" if i == 0 else ""
+            m_str = format_relative_time(s["latest_mtime"])
+            print(f"  [{i+1}] {s['conv_id']}{tag}")
+            print(f"      Modified: {m_str} | Files: {s['files_count']}")
+        print("\nSwitch to a specific session with: staged-diff -s <session-id>")
+        return
+
+    active_session = None
+    if conv_id_override:
+        for s in sessions:
+            if s["conv_id"].startswith(conv_id_override):
+                active_session = s
+                break
+        if not active_session:
+            # Also check globally in case user specified a session from another directory
+            target_staging = os.path.join(BRAIN_DIR, conv_id_override, "staging")
+            if os.path.isdir(target_staging):
+                active_session = {
+                    "conv_id": conv_id_override,
+                    "conv_dir": os.path.dirname(target_staging),
+                    "staging_dir": target_staging,
+                    "latest_mtime": get_staging_latest_mtime(target_staging),
+                    "files_count": len(collect_staged_files(target_staging)),
+                    "workspace": repo_root or cwd
+                }
+            else:
+                print(f"Error: Session '{conv_id_override}' not found.")
+                sys.exit(1)
+    else:
+        if sessions:
+            # Default to the session with the most recent diffs
+            active_session = sessions[0]
+
+    if not active_session:
+        if repo_root:
+            print(f"No active staged changes found for repository: {repo_root}")
+        else:
+            print(f"Not inside a Git repository or no staged changes found for: {cwd}")
+        print("Tip: Run `staged-diff --all-repos` to view staging sessions across all projects.")
+        sys.exit(1)
+
+    staging_dir = active_session["staging_dir"]
+    conv_dir = active_session["conv_dir"]
+    conv_id = active_session["conv_id"]
+    ws_dir = active_session.get("workspace") or repo_root or cwd
+    renames_map, manifest_path = load_renames_manifest(conv_dir, staging_dir)
+    if not manifest_path:
+        manifest_path = os.path.join(conv_dir, "renames.json")
+
+    staged_files = collect_staged_files(staging_dir)
+
+    # Command: staged-diff clean
+    if len(args) >= 1 and args[0] == "clean":
+        print(f"Purging staging directory for session {conv_id}...")
+        for rel, abs_path in staged_files:
+            try:
+                os.remove(abs_path)
+            except Exception:
+                pass
+        # Clean up empty directories inside staging
+        for root, dirs, _ in os.walk(staging_dir, topdown=False):
+            for d in dirs:
+                try:
+                    os.rmdir(os.path.join(root, d))
+                except Exception:
+                    pass
+        print(f"Successfully cleaned {len(staged_files)} staged file(s).")
+        return
+
+    # Command: staged-diff apply [-f|--file] <filename|all>
+    if len(args) >= 2 and args[0] == "apply":
+        target = args[1].strip()
+        if target in ("-f", "--file", "--f") and len(args) >= 3:
+            target = args[2].strip()
+
+        if target == "all":
+            applied_count = 0
+            for rel, _ in staged_files:
+                if apply_staged_file(cwd, staging_dir, rel, renames_map):
+                    applied_count += 1
+            
+            deletions = renames_map.get("_deletions", [])
+            for del_rel in deletions:
+                del_ws = os.path.join(cwd, del_rel)
+                if os.path.isfile(del_ws):
+                    os.remove(del_ws)
+                    print(f"  [REMOVED OBSOLETE] {del_rel}")
+
+            print(f"\nSuccessfully applied {applied_count} staged file(s) to workspace!")
+            print("Tip: Run `staged-diff clean` to remove staged files from session.")
+            return
+
+        target_lower = target.lower()
+        matched = []
+        for rel, _ in staged_files:
+            if target_lower == rel.lower() or target_lower == os.path.basename(rel).lower():
+                matched.append(rel)
+
+        if not matched:
+            for rel, _ in staged_files:
+                if target_lower in rel.lower() or target_lower in os.path.basename(rel).lower():
+                    matched.append(rel)
+
+        if not matched:
+            print(f"No staged file matched '{target}'. Run `staged-diff --list` to view available files.")
+            sys.exit(1)
+
+        for rel in matched:
+            apply_staged_file(cwd, staging_dir, rel, renames_map)
+        return
+
+    # Command: staged-diff rename <old_path> <new_path>
+    if len(args) >= 3 and args[0] == "rename":
+        old_path = args[1].strip()
+        new_path = args[2].strip()
+        if os.path.isabs(old_path):
+            old_path = os.path.relpath(old_path, cwd)
+        if os.path.isabs(new_path):
+            new_path = os.path.relpath(new_path, cwd)
+
+        old_staged = os.path.join(staging_dir, old_path)
+        new_staged = os.path.join(staging_dir, new_path)
+        if os.path.isfile(old_staged):
+            os.makedirs(os.path.dirname(new_staged), exist_ok=True)
+            os.rename(old_staged, new_staged)
+            print(f"Renamed in staging: {old_path} -> {new_path}")
+        else:
+            found = False
+            for root, _, files in os.walk(staging_dir):
+                if old_path in files:
+                    matched_old_full = os.path.join(root, old_path)
+                    matched_old_rel = os.path.relpath(matched_old_full, staging_dir)
+                    matched_new_full = os.path.join(os.path.dirname(matched_old_full), os.path.basename(new_path))
+                    matched_new_rel = os.path.relpath(matched_new_full, staging_dir)
+                    os.rename(matched_old_full, matched_new_full)
+                    print(f"Renamed in staging: {matched_old_rel} -> {matched_new_rel}")
+                    old_path = matched_old_rel
+                    new_path = matched_new_rel
+                    found = True
+                    break
+            if not found:
+                print(f"Warning: Staged file not found at {old_staged}")
+
+        original_workspace_file = renames_map.get(old_path, old_path)
+        renames_map[new_path] = original_workspace_file
+        if old_path in renames_map and old_path != new_path:
+            del renames_map[old_path]
+        save_renames_manifest(manifest_path, renames_map)
+        print(f"Recorded rename mapping: {new_path} <= {original_workspace_file}")
+        return
+
+    if not staged_files:
+        print(f"Staging directory for repository ({ws_dir}) is empty.")
+        sys.exit(0)
+
+    # Completion helper
+    if len(args) >= 1 and args[0] == "--complete":
+        print("all:Open all diff tabs in editor")
+        print("apply:Apply staged file(s) directly to workspace")
+        print("clean:Purge current session's staging directory")
+        print("rename:Rename a staged file and track mapping")
+        seen_basenames = set()
+        for rel, _ in sorted(staged_files, key=lambda x: x[0]):
+            ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
+            basename = os.path.basename(rel)
+            desc = status
+            if status in ("RENAMED", "RELOCATED") and ws_file:
+                desc += f" from {os.path.basename(ws_file)}"
+            elif status == "APPLIED" and orig_info:
+                desc += f" (applied)"
+            desc_safe = desc.replace(":", "-")
+
+            if basename not in seen_basenames:
+                seen_basenames.add(basename)
+                print(f"{basename}:{desc_safe}")
+            print(f"{rel}:{desc_safe}")
+        return
+
+    if len(args) >= 1 and args[0] == "--list":
+        for rel, _ in sorted(staged_files, key=lambda x: x[0]):
+            print(rel)
+        return
+
+    # If no args or help, display available files
+    if len(args) < 1 or args[0] in ("-h", "--help"):
+        m_str = format_relative_time(active_session["latest_mtime"])
+        other_sessions = [s for s in sessions if s["conv_id"] != conv_id]
+
+        print(f"Repository:         {ws_dir}")
+        print(f"Active Session:     {conv_id} (modified {m_str})")
+        if other_sessions:
+            older_count = len(other_sessions)
+            print(f"Other Sessions:     {older_count} older session(s) found. Run `staged-diff --sessions` to list/switch.")
+        print(f"Staging Root:        {staging_dir}")
+        print(f"Renames Manifest:    {manifest_path}\n")
+
+        print("Usage:")
+        print("  staged-diff <filename>               # Open side-by-side diff (fuzzy match)")
+        print("  staged-diff all                      # Open side-by-side diffs for all modified/relocated files")
+        print("  staged-diff apply [-f|--file] <file> # Apply a staged file to workspace")
+        print("  staged-diff apply all                # Apply all staged files and remove obsolete/renamed files")
+        print("  staged-diff clean                    # Purge staging directory for current session")
+        print("  staged-diff -s <session-id>          # Switch to a different staging session")
+        print("  staged-diff --sessions               # List all staging sessions for current repo")
+        print("  staged-diff --all-repos              # List staging sessions across all repositories")
+        print("  staged-diff --install-completion     # Install zsh shell tab-completion\n")
+
+        applied_count = 0
+        file_results = []
+        for rel, staged_abs in sorted(staged_files, key=lambda x: x[0]):
+            ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
+            if status == "APPLIED":
+                applied_count += 1
+            file_results.append((rel, ws_file, status, orig_info))
+
+        pending_count = len(staged_files) - applied_count
+        if applied_count == len(staged_files):
+            summary_badge = f" (all {applied_count} applied)"
+        elif applied_count > 0:
+            summary_badge = f" ({applied_count} applied, {pending_count} pending)"
+        else:
+            summary_badge = ""
+
+        print(f"Staged Files{summary_badge}:")
+        for rel, ws_file, status, orig_info in file_results:
+            tag_color = {
+                "APPLIED": "32",   # Green
+                "MODIFIED": "33",  # Yellow
+                "NEW FILE": "36",  # Cyan
+                "RENAMED": "35",   # Magenta
+                "RELOCATED": "35", # Magenta
+            }.get(status, "0")
+            status_tag = f"[{status:9}]"
+            colored_tag = colorize(status_tag, tag_color)
+            print(f"  {colored_tag} {rel}{orig_info}")
+
+        if applied_count == len(staged_files):
+            print(colorize("\nAll changes from this staging session are present in the workspace!", "32"))
+            print("Tip: Run `staged-diff clean` to purge the staging directory.")
+        return
+
+    arg = args[0].strip()
+
+    if arg == "all":
+        count = 0
+        skipped_applied = 0
+        for rel, staged_abs in staged_files:
+            ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
+            if ws_file:
+                if status == "APPLIED":
+                    skipped_applied += 1
+                    continue
+                print(f"Opening diff [{status}]: {os.path.relpath(ws_file, cwd)} <-> {rel}")
+                subprocess.run([IDE_BIN, "-r", "-d", ws_file, staged_abs])
+                count += 1
+            else:
+                print(f"Skipping new file (no original to diff against): {rel}")
+        if skipped_applied > 0:
+            print(f"Skipped {skipped_applied} already applied file(s).")
+        print(f"Opened {count} diff tab(s) in Antigravity IDE.")
+        return
+
+    # Fuzzy match
+    matches = []
+    arg_lower = arg.lower()
+    for rel, staged_abs in staged_files:
+        if arg_lower in rel.lower() or arg_lower in os.path.basename(rel.lower()):
+            matches.append((rel, staged_abs))
+
+    if not matches:
+        print(f"No staged file matched '{arg}'. Run `staged-diff` to list files.")
+        sys.exit(1)
+
+    for rel, staged_abs in matches:
+        ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
+        if ws_file:
+            applied_note = " (already applied)" if status == "APPLIED" else ""
+            print(f"Opening side-by-side diff [{status}]: {os.path.relpath(ws_file, cwd)} <-> {rel}{applied_note}")
+            subprocess.run([IDE_BIN, "-r", "-d", ws_file, staged_abs])
+        else:
+            print(f"File is new in staging (no original workspace file to diff against): {rel}")
+            print("Opening file directly in Antigravity IDE...")
+            subprocess.run([IDE_BIN, "-r", staged_abs])
+
+if __name__ == "__main__":
+    main()
