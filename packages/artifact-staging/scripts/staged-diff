@@ -21,10 +21,64 @@ HOME = os.path.expanduser("~")
 BRAIN_DIR = os.path.join(HOME, ".gemini/antigravity-ide/brain")
 IDE_BIN = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
 
+STATUS_COLORS = {
+    "APPLIED": "32",   # Green
+    "MODIFIED": "33",  # Yellow
+    "NEW FILE": "36",  # Cyan
+    "RENAMED": "35",   # Magenta
+    "RELOCATED": "35", # Magenta
+}
+USAGE_SUBCOMMANDS = {"all", "apply", "clean", "rename"}
+
 def colorize(text, color_code):
     if sys.stdout.isatty():
         return f"\033[{color_code}m{text}\033[0m"
     return text
+
+def colorize_placeholders(text):
+    return "".join(
+        colorize(part, "33") if part.startswith("<") and part.endswith(">") else part
+        for part in re.split(r"(<[^>]+>)", text)
+    )
+
+def colorize_usage_invocation(invocation, program):
+    def paint(token):
+        if token == program:
+            return colorize(token, "1;36")
+        if token in USAGE_SUBCOMMANDS:
+            return colorize(token, "1")
+        if token.startswith("<") and token.endswith(">"):
+            return colorize(token, "33")
+        if token.startswith("--") or re.fullmatch(r"-[A-Za-z],?", token):
+            return colorize(token, "36")
+        if token.startswith("[") and token.endswith("]") and "|" in token:
+            inner = token[1:-1]
+            painted = "|".join(
+                colorize(part, "36") if part.startswith("-") else part
+                for part in inner.split("|")
+            )
+            return "[" + painted + "]"
+        return token
+
+    return "".join(
+        paint(token) if not token.isspace() else token
+        for token in re.findall(r"\s+|\S+", invocation)
+    )
+
+def print_usage_line(line, program):
+    gaps = list(re.finditer(r" {2,}(?=[A-Z])", line))
+    if not gaps:
+        print(colorize_usage_invocation(line, program))
+        return
+    gap = gaps[-1]
+    print(
+        f"{colorize_usage_invocation(line[:gap.start()], program)}"
+        f"{gap.group(0)}{line[gap.end():]}"
+    )
+
+def print_status_legend(status, description):
+    tag = f"[{status}]"
+    print(f"  {colorize(tag, STATUS_COLORS[status])}{' ' * (13 - len(tag))}{description}")
 
 def is_file_equal(path1, path2):
     if not (path1 and path2 and os.path.isfile(path1) and os.path.isfile(path2)):
@@ -306,54 +360,80 @@ def apply_staged_file(cwd, staging_dir, rel_path, renames_map):
 def install_zsh_completion():
     zfunc_dir = os.path.join(HOME, ".zfunc")
     os.makedirs(zfunc_dir, exist_ok=True)
-    completion_file = os.path.join(zfunc_dir, "_staged-diff")
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    src = os.path.realpath(os.path.join(script_dir, "..", "completions", "_staged-diff"))
+    if not os.path.isfile(src):
+        print(f"Error: completion not found at {src}", file=sys.stderr)
+        sys.exit(1)
+    dest = os.path.join(zfunc_dir, os.path.basename(src))
+    if os.path.islink(dest) or os.path.isfile(dest):
+        os.remove(dest)
+    os.symlink(src, dest)
+    print(f"Installed zsh completion to {dest}")
+    print("Open a new shell if tab completion does not appear yet.")
 
-    script_content = """#compdef staged-diff
+def print_usage():
+    program = "staged-diff"
+    print(f"{colorize(program, '1;36')} — list, diff, and apply files staged outside the workspace.\n")
+    print(f"{colorize('Staging directory:', '1')} " + colorize_placeholders(
+        "~/.gemini/antigravity-ide/brain/<conversation-id>/staging/"
+    ))
+    print(f"{colorize('Diffs open with:', '1')} " + colorize_placeholders(
+        "antigravity-ide -r -d <original> <staged>"
+    ))
+    print("\nNothing is copied into the workspace until you run apply.\n")
+    print(colorize("Usage:", "1"))
+    for line in (
+        "  staged-diff                         List staged files for this repository",
+        "  staged-diff <filename>              Open a side-by-side diff (fuzzy match)",
+        "  staged-diff all                     Open diffs for every pending file",
+        "  staged-diff apply [-f|--file] <file>",
+        "  staged-diff apply <file>            Copy one staged file into the workspace",
+        "  staged-diff apply all               Copy every staged file, then remove renamed originals",
+        "  staged-diff rename <old> <new>      Rename a staged file and record the mapping",
+        "  staged-diff clean                   Delete this session's staged files",
+        "  staged-diff --sessions              List staging sessions for this repository",
+        "  staged-diff -s, --session <id>      Use one session (a unique prefix of the id is enough)",
+        "  staged-diff --all-repos             List staging sessions across repositories",
+        "  staged-diff --install-completion    Link zsh tab completion into ~/.zfunc",
+        "  staged-diff --help                  Show this help",
+    ):
+        print_usage_line(line, program)
+    print()
+    print(colorize("With no arguments, each file is tagged:", "1"))
+    for status, description in (
+        ("APPLIED", "Workspace already matches the staged file"),
+        ("MODIFIED", "Workspace file exists and still differs"),
+        ("RENAMED", "Staged path is a new filename (see renames.json)"),
+        ("RELOCATED", "Staged path moved, same filename"),
+        ("NEW FILE", "No workspace file to diff against"),
+    ):
+        print_status_legend(status, description)
+    print()
+    print(f"Do not run `{colorize(program + ' all', '1;33')}` unless you want a diff tab for every pending file.")
 
-_staged-diff() {
-    local -a completions targets files apply_options session_options
-    local line
-
-    if (( CURRENT == 2 )); then
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && completions+=("$line")
-        done < <(staged-diff --complete 2>/dev/null)
-        _describe -t targets 'staged files & commands' completions
-    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "apply" ]]; then
-        apply_options=("-f:Specify staged file to apply" "--file:Specify staged file to apply" "all:Apply all staged files and remove obsolete files")
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && files+=("$line")
-        done < <(staged-diff --list 2>/dev/null)
-        _describe -t options 'apply options' apply_options
-        _describe -t files 'staged files' files
-    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "apply" ]] && [[ "${words[3]}" == "-f" || "${words[3]}" == "--file" || "${words[3]}" == "--f" ]]; then
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && files+=("$line")
-        done < <(staged-diff --list 2>/dev/null)
-        _describe -t files 'staged files' files
-    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "rename" ]]; then
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && files+=("$line")
-        done < <(staged-diff --list 2>/dev/null)
-        _describe -t files 'staged files' files
-    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "rename" ]]; then
-        _files
-    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "-s" || "${words[2]}" == "--session" ]]; then
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && session_options+=("$line")
-        done < <(staged-diff --complete-sessions 2>/dev/null)
-        _describe -t sessions 'available sessions' session_options
-    fi
-}
-
-_staged-diff "$@"
-"""
-    with open(completion_file, "w") as f:
-        f.write(script_content)
-    print(f"Installed zsh completion to {completion_file}")
+def print_file_completions(cwd, staging_dir, renames_map, staged_files):
+    seen_basenames = set()
+    for rel, _ in sorted(staged_files, key=lambda x: x[0]):
+        ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
+        basename = os.path.basename(rel)
+        desc = status
+        if status in ("RENAMED", "RELOCATED") and ws_file:
+            desc += f" from {os.path.basename(ws_file)}"
+        elif status == "APPLIED" and orig_info:
+            desc += " (applied)"
+        desc_safe = desc.replace(":", "-")
+        if basename not in seen_basenames:
+            seen_basenames.add(basename)
+            print(f"{basename}:{desc_safe}")
+        print(f"{rel}:{desc_safe}")
 
 def main():
     cwd = os.getcwd()
+
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
+        print_usage()
+        return
 
     if len(sys.argv) >= 2 and sys.argv[1] == "--install-completion":
         install_zsh_completion()
@@ -423,12 +503,25 @@ def main():
             # Default to the session with the most recent diffs
             active_session = sessions[0]
 
+    if len(args) >= 1 and args[0] in ("--complete", "--list"):
+        if active_session:
+            completion_staging = active_session["staging_dir"]
+            completion_renames, _ = load_renames_manifest(active_session["conv_dir"], completion_staging)
+            completion_files = collect_staged_files(completion_staging)
+            if args[0] == "--list":
+                for rel, _ in sorted(completion_files, key=lambda x: x[0]):
+                    print(rel)
+            else:
+                print_file_completions(cwd, completion_staging, completion_renames, completion_files)
+        return
+
     if not active_session:
         if repo_root:
             print(f"No active staged changes found for repository: {repo_root}")
         else:
             print(f"Not inside a Git repository or no staged changes found for: {cwd}")
         print("Tip: Run `staged-diff --all-repos` to view staging sessions across all projects.")
+        print("Run `staged-diff --help` for usage.")
         sys.exit(1)
 
     staging_dir = active_session["staging_dir"]
@@ -545,36 +638,8 @@ def main():
         print(f"Staging directory for repository ({ws_dir}) is empty.")
         sys.exit(0)
 
-    # Completion helper
-    if len(args) >= 1 and args[0] == "--complete":
-        print("all:Open all diff tabs in editor")
-        print("apply:Apply staged file(s) directly to workspace")
-        print("clean:Purge current session's staging directory")
-        print("rename:Rename a staged file and track mapping")
-        seen_basenames = set()
-        for rel, _ in sorted(staged_files, key=lambda x: x[0]):
-            ws_file, status, orig_info = resolve_workspace_pair(cwd, rel, renames_map, staging_dir)
-            basename = os.path.basename(rel)
-            desc = status
-            if status in ("RENAMED", "RELOCATED") and ws_file:
-                desc += f" from {os.path.basename(ws_file)}"
-            elif status == "APPLIED" and orig_info:
-                desc += f" (applied)"
-            desc_safe = desc.replace(":", "-")
-
-            if basename not in seen_basenames:
-                seen_basenames.add(basename)
-                print(f"{basename}:{desc_safe}")
-            print(f"{rel}:{desc_safe}")
-        return
-
-    if len(args) >= 1 and args[0] == "--list":
-        for rel, _ in sorted(staged_files, key=lambda x: x[0]):
-            print(rel)
-        return
-
-    # If no args or help, display available files
-    if len(args) < 1 or args[0] in ("-h", "--help"):
+    # If no args, display available files
+    if len(args) < 1:
         m_str = format_relative_time(active_session["latest_mtime"])
         other_sessions = [s for s in sessions if s["conv_id"] != conv_id]
 
@@ -595,6 +660,7 @@ def main():
         print("  staged-diff -s <session-id>          # Switch to a different staging session")
         print("  staged-diff --sessions               # List all staging sessions for current repo")
         print("  staged-diff --all-repos              # List staging sessions across all repositories")
+        print("  staged-diff --help                   # Show how to use this command")
         print("  staged-diff --install-completion     # Install zsh shell tab-completion\n")
 
         applied_count = 0
@@ -615,13 +681,7 @@ def main():
 
         print(f"Staged Files{summary_badge}:")
         for rel, ws_file, status, orig_info in file_results:
-            tag_color = {
-                "APPLIED": "32",   # Green
-                "MODIFIED": "33",  # Yellow
-                "NEW FILE": "36",  # Cyan
-                "RENAMED": "35",   # Magenta
-                "RELOCATED": "35", # Magenta
-            }.get(status, "0")
+            tag_color = STATUS_COLORS.get(status, "0")
             status_tag = f"[{status:9}]"
             colored_tag = colorize(status_tag, tag_color)
             print(f"  {colored_tag} {rel}{orig_info}")

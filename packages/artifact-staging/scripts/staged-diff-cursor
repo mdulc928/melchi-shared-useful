@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""
+staged-diff-cursor: Cursor staging manager.
+
+Same commands as staged-diff. Reads ~/.local/share/cursor-artifact-staging and opens
+diffs with `cursor -r --diff`. Does not modify scripts/staged-diff.
+"""
+
+import json
+import os
+import re
+import sys
+
+HOME = os.path.expanduser("~")
+HERE = os.path.dirname(os.path.realpath(__file__))
+SOURCE = os.path.join(HERE, "staged-diff")
+STAGING_ROOT = os.path.realpath(os.path.join(HOME, ".local", "share", "cursor-artifact-staging"))
+AUTORUN_STAGING_INSTRUCTION = (
+    "Creating or editing files under ~/.local/share/cursor-artifact-staging for artifact-first staging."
+)
+
+def _load_json_file(path):
+    if not os.path.isfile(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _write_json_file(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+def _realpath_strings(paths):
+    out = []
+    for entry in paths:
+        if isinstance(entry, str) and entry.strip():
+            out.append(os.path.realpath(os.path.expanduser(entry.strip())))
+    return out
+
+def install_sandbox_write_allowlist(staging_path):
+    sandbox_file = os.path.join(HOME, ".cursor", "sandbox.json")
+    data = _load_json_file(sandbox_file)
+    data.setdefault("type", "workspace_readwrite")
+    paths = _realpath_strings(data.get("additionalReadwritePaths") or [])
+    staging_path = os.path.realpath(staging_path)
+    if staging_path in paths:
+        return False, sandbox_file
+    paths.append(staging_path)
+    data["additionalReadwritePaths"] = sorted(set(paths))
+    _write_json_file(sandbox_file, data)
+    return True, sandbox_file
+
+def install_cli_write_allowlist(staging_path):
+    cli_config = os.path.join(HOME, ".cursor", "cli-config.json")
+    staging_path = os.path.realpath(staging_path)
+    pattern = f"Write({staging_path}/**)"
+    data = _load_json_file(cli_config)
+    if not data:
+        data = {"version": 1, "permissions": {"allow": [], "deny": []}}
+    perms = data.setdefault("permissions", {})
+    allow = list(perms.get("allow") or [])
+    if pattern in allow:
+        return False, cli_config
+    allow.append(pattern)
+    perms["allow"] = allow
+    _write_json_file(cli_config, data)
+    return True, cli_config
+
+def install_autorun_steering():
+    permissions_file = os.path.join(HOME, ".cursor", "permissions.json")
+    data = _load_json_file(permissions_file)
+    auto_run = data.setdefault("autoRun", {})
+    allow = list(auto_run.get("allow_instructions") or [])
+    if AUTORUN_STAGING_INSTRUCTION in allow:
+        return False, permissions_file
+    allow.append(AUTORUN_STAGING_INSTRUCTION)
+    auto_run["allow_instructions"] = allow
+    data["autoRun"] = auto_run
+    _write_json_file(permissions_file, data)
+    return True, permissions_file
+
+def confirm_autorun_steering(assume_yes):
+    print("\nAuto-review can still prompt on shell/MCP calls.")
+    print("Add a steering hint to ~/.cursor/permissions.json → autoRun.allow_instructions")
+    print("(does not grant filesystem access; sandbox.json still required).\n")
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not a TTY — skipped autoRun hint. Re-run with --yes or edit permissions.json.", file=sys.stderr)
+        return False
+    try:
+        answer = input("Add artifact-staging autoRun hint now? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+def print_sandbox_vs_approvals_note():
+    print(
+        "\nSandbox writes and approval prompts are different settings.\n"
+        "  • ~/.cursor/sandbox.json → additionalReadwritePaths lets sandboxed tools create files there.\n"
+        "  • Cursor Settings → Agents → Approvals & Execution controls whether you see approval cards.\n"
+        "    autoRun.allow_instructions in ~/.cursor/permissions.json only steers Auto-review; it does not grant filesystem access.\n"
+        "Docs: cursor.com/docs/reference/sandbox and cursor.com/docs/reference/permissions\n"
+        "Start a new agent session after changing sandbox.json so the terminal sandbox reloads it."
+    )
+
+def confirm_sandbox_write_path(staging_path, assume_yes):
+    print(f"\nStaging writes go to:\n  {staging_path}\n")
+    print("Add this directory to ~/.cursor/sandbox.json → additionalReadwritePaths")
+    print("(merged with <repo>/.cursor/sandbox.json when present). Keep type workspace_readwrite.")
+    print("Optional for Cursor CLI only: permissions.allow Write(...) in ~/.cursor/cli-config.json\n")
+    print("This does not disable approval prompts. Those are configured separately in Cursor Settings.\n")
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print("Not a TTY — skipped sandbox path. Re-run with --yes or edit ~/.cursor/sandbox.json.", file=sys.stderr)
+        return False
+    try:
+        answer = input("Add staging path to sandbox.json now? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+STATUS_COLORS = {
+    "APPLIED": "32",
+    "MODIFIED": "33",
+    "NEW FILE": "36",
+    "RENAMED": "35",
+    "RELOCATED": "35",
+}
+USAGE_SUBCOMMANDS = {"all", "apply", "clean", "rename"}
+
+def colorize(text, color_code):
+    if sys.stdout.isatty():
+        return f"\033[{color_code}m{text}\033[0m"
+    return text
+
+def colorize_placeholders(text):
+    return "".join(
+        colorize(part, "33") if part.startswith("<") and part.endswith(">") else part
+        for part in re.split(r"(<[^>]+>)", text)
+    )
+
+def colorize_usage_invocation(invocation, program):
+    def paint(token):
+        if token == program:
+            return colorize(token, "1;36")
+        if token in USAGE_SUBCOMMANDS:
+            return colorize(token, "1")
+        if token.startswith("<") and token.endswith(">"):
+            return colorize(token, "33")
+        if token.startswith("--") or re.fullmatch(r"-[A-Za-z],?", token):
+            return colorize(token, "36")
+        if token.startswith("[") and token.endswith("]") and "|" in token:
+            inner = token[1:-1]
+            painted = "|".join(
+                colorize(part, "36") if part.startswith("-") else part
+                for part in inner.split("|")
+            )
+            return "[" + painted + "]"
+        return token
+
+    return "".join(
+        paint(token) if not token.isspace() else token
+        for token in re.findall(r"\s+|\S+", invocation)
+    )
+
+def print_usage_line(line, program):
+    gaps = list(re.finditer(r" {2,}(?=[A-Z])", line))
+    if not gaps:
+        print(colorize_usage_invocation(line, program))
+        return
+    gap = gaps[-1]
+    print(
+        f"{colorize_usage_invocation(line[:gap.start()], program)}"
+        f"{gap.group(0)}{line[gap.end():]}"
+    )
+
+def print_status_legend(status, description):
+    tag = f"[{status}]"
+    print(f"  {colorize(tag, STATUS_COLORS[status])}{' ' * (13 - len(tag))}{description}")
+
+def print_usage():
+    program = "staged-diff-cursor"
+    print(f"{colorize(program, '1;36')} — review proposed files in Cursor before they touch the workspace.\n")
+    print(f"{colorize('Staging directory:', '1')} " + colorize_placeholders(
+        "~/.local/share/cursor-artifact-staging/<conversation-id>/staging/"
+    ))
+    print(f"{colorize('Diffs open with:', '1')} " + colorize_placeholders(
+        "cursor -r --diff <original> <staged>"
+    ))
+    print("\nThe agent should edit only files under the staging directory above, not your repo.")
+    print("Run apply when you want staged copies copied into the workspace.\n")
+    print(colorize("Usage:", "1"))
+    for line in (
+        "  staged-diff-cursor                         List staged files for this repository",
+        "  staged-diff-cursor <filename>              Open a side-by-side diff (fuzzy match)",
+        "  staged-diff-cursor all                     Open diffs for every pending file",
+        "  staged-diff-cursor apply [-f|--file] <file>",
+        "  staged-diff-cursor apply <file>            Copy one staged file into the workspace",
+        "  staged-diff-cursor apply all               Copy every staged file, then remove renamed originals",
+        "  staged-diff-cursor rename <old> <new>      Rename a staged file and record the mapping",
+        "  staged-diff-cursor clean                   Delete this session's staged files",
+        "  staged-diff-cursor --sessions              List staging sessions for this repository",
+        "  staged-diff-cursor -s, --session <id>      Use one session (a unique prefix of the id is enough)",
+        "  staged-diff-cursor --all-repos             List staging sessions across repositories",
+        "  staged-diff-cursor --install-completion    Link zsh tab completion into ~/.zfunc",
+        "  staged-diff-cursor --install-cursor-skill  Link skill + prompt for sandbox.json write path",
+        "  staged-diff-cursor --install-cursor-skill --yes  Configure sandbox + autoRun without prompting",
+        "  staged-diff-cursor --help                  Show this help",
+    ):
+        print_usage_line(line, program)
+    print()
+    print(colorize("With no arguments, each file is tagged:", "1"))
+    for status, description in (
+        ("APPLIED", "Workspace already matches the staged file"),
+        ("MODIFIED", "Workspace file exists and still differs"),
+        ("RENAMED", "Staged path is a new filename (see renames.json)"),
+        ("RELOCATED", "Staged path moved, same filename"),
+        ("NEW FILE", "No workspace file to diff against"),
+    ):
+        print_status_legend(status, description)
+    print()
+    print(f"Do not run `{colorize(program + ' all', '1;33')}` unless you want a diff tab for every pending file.")
+
+def install_cursor_skill(assume_yes=False):
+    skill_src = os.path.realpath(os.path.join(HERE, "..", "skills", "cursor"))
+    if not os.path.isfile(os.path.join(skill_src, "SKILL.md")):
+        print(f"Error: Cursor skill not found at {skill_src}", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(STAGING_ROOT, exist_ok=True)
+
+    dest_parent = os.path.join(HOME, ".cursor", "skills")
+    dest = os.path.join(dest_parent, "artifact-first-staging")
+    os.makedirs(dest_parent, exist_ok=True)
+    if os.path.islink(dest):
+        os.remove(dest)
+    elif os.path.exists(dest):
+        print(f"Error: {dest} already exists and is not a symlink.", file=sys.stderr)
+        sys.exit(1)
+    os.symlink(skill_src, dest)
+    print(f"Linked Cursor skill to {dest}")
+
+    if confirm_sandbox_write_path(STAGING_ROOT, assume_yes):
+        added, sandbox_file = install_sandbox_write_allowlist(STAGING_ROOT)
+        if added:
+            print(f"Added staging path to {sandbox_file}")
+        else:
+            print(f"Staging path already in {sandbox_file}")
+
+        added_cli, cli_file = install_cli_write_allowlist(STAGING_ROOT)
+        if added_cli:
+            print(f"Added Write({STAGING_ROOT}/**) to {cli_file} (CLI only)")
+        elif os.path.isfile(cli_file):
+            print(f"CLI Write rule already in {cli_file}")
+
+        print_sandbox_vs_approvals_note()
+    else:
+        print("\nSkipped sandbox.json update. Add manually:")
+        print(f'  "additionalReadwritePaths": ["{STAGING_ROOT}"]')
+        print_sandbox_vs_approvals_note()
+
+    if confirm_autorun_steering(assume_yes):
+        added, permissions_file = install_autorun_steering()
+        if added:
+            print(f"Added autoRun.allow_instructions to {permissions_file}")
+        else:
+            print(f"autoRun hint already in {permissions_file}")
+        print("Requires Auto-review mode in Cursor Settings → Agents → Approvals & Execution.")
+    else:
+        print("\nSkipped permissions.json. Add manually under autoRun.allow_instructions:")
+        print(f'  "{AUTORUN_STAGING_INSTRUCTION}"')
+
+def adapt(src):
+    def must_replace(text, old, new, expected=1):
+        found = text.count(old)
+        if found != expected:
+            print(
+                f"staged-diff-cursor: expected {expected} occurrence(s) of this snippet in staged-diff, found {found}:\n{old}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return text.replace(old, new)
+
+    src = must_replace(
+        src,
+        'BRAIN_DIR = os.path.join(HOME, ".gemini/antigravity-ide/brain")',
+        'BRAIN_DIR = os.environ.get("STAGED_DIFF_CURSOR_BRAIN") or os.path.join(HOME, ".local", "share", "cursor-artifact-staging")',
+    )
+    src = must_replace(
+        src,
+        'IDE_BIN = "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"',
+        '''def _cursor_bin():
+    override = os.environ.get("STAGED_DIFF_CURSOR_BIN")
+    if override:
+        return override
+    found = shutil.which("cursor")
+    if found:
+        return found
+    mac = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+    if os.path.isfile(mac):
+        return mac
+    return "cursor"
+
+IDE_BIN = _cursor_bin()''',
+    )
+    src = must_replace(
+        src,
+        'subprocess.run([IDE_BIN, "-r", "-d", ws_file, staged_abs])',
+        'subprocess.run([IDE_BIN, "-r", "--diff", ws_file, staged_abs])',
+        expected=2,
+    )
+    src = must_replace(
+        src,
+        'print("  staged-diff --install-completion     # Install zsh shell tab-completion\\n")',
+        'print("  staged-diff --install-completion     # Install zsh shell tab-completion")\n'
+        '        print("  staged-diff --install-cursor-skill   # Symlink the Cursor skill into ~/.cursor/skills\\n")',
+    )
+    src = must_replace(src, "Antigravity IDE", "Cursor", expected=3)
+    src = src.replace("staged-diff", "staged-diff-cursor")
+    return src
+
+def main():
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
+        print_usage()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "--install-cursor-skill":
+        assume_yes = "--yes" in sys.argv[2:] or "-y" in sys.argv[2:]
+        install_cursor_skill(assume_yes=assume_yes)
+        return
+
+    if not os.path.isfile(SOURCE):
+        print(f"Error: {SOURCE} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(SOURCE, "r", encoding="utf-8") as f:
+        src = adapt(f.read())
+
+    globs = {
+        "__name__": "__main__",
+        "__file__": SOURCE,
+        "__package__": None,
+    }
+    exec(compile(src, SOURCE, "exec"), globs)
+
+if __name__ == "__main__":
+    main()
