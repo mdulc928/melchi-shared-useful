@@ -1,0 +1,13 @@
+{
+	"name": "@melchi/git-worktrees",
+	"version": "1.0.0",
+	"description": "Git worktree workspace management tools, aliases, and zsh autocompletion",
+	"type": "module",
+	"scripts": {
+		"test": "zsh -n git-worktrees.zsh"
+	},
+	"files": [
+		"git-worktrees.zsh",
+		"README.md"
+	]
+}
