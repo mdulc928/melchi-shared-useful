@@ -1,0 +1,23 @@
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
+
+# Build Outputs
+dist
+**/dist
+build
+**/build
+.svelte-kit
+**/.svelte-kit
+out
+**/out
+*.vsix
+
+# Static & dependencies
+node_modules
+**/node_modules
+/static/
+**/static/

@@ -16,3 +16,6 @@ export const ZINDEX_LAYERS = {
 		value: 1
 	}
 };
+
+export const focusClasses =
+	'focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent';

@@ -38,7 +38,7 @@ Dock the component to the FAB **only** when the component scrolls out of the vie
 		<!-- 3. Teleport content to the active target (local wrapper or global drawer) -->
 		<Portal to={portable.target}>
 			<div class="contents" bind:this={portable.content}>
-				<div class="rounded-xl border border-border bg-white p-4 dark:bg-gray-800">
+				<div class="border-border rounded-xl border bg-white p-4 dark:bg-gray-800">
 					<h3 class="font-bold">Tools Menu</h3>
 					<p>This content will seamlessly jump to the drawer when off-screen!</p>
 				</div>

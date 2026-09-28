@@ -4,14 +4,20 @@
 
 	let {
 		children,
+		href = '/auth',
 		class: className = '',
 		subtitleClass
-	}: { children: Snippet; class?: string; subtitleClass?: string } = $props();
+	}: {
+		children: Snippet;
+		href?: string;
+		class?: string;
+		subtitleClass?: string;
+	} = $props();
 </script>
 
 <div class="flex w-full flex-col items-start gap-2">
 	<a
-		href="/auth"
+		{href}
 		class={cc(
 			'group/btn relative inline-flex h-14 w-auto items-center justify-center rounded-md border border-black bg-black px-8 text-left text-lg font-bold text-white transition-all hover:bg-transparent hover:text-black dark:border-white dark:bg-white dark:text-black dark:hover:text-white',
 			className

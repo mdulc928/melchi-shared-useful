@@ -1,6 +1,6 @@
 <script lang="ts" generics="T">
 	import { DropdownMenu } from 'bits-ui';
-	import ChevronDownIcon from '$lib/components/ui/icons/ChevronDownIcon.svelte';
+	import ChevronDownIcon from './icons/ChevronDownIcon.svelte';
 	import type { Snippet } from 'svelte';
 
 	type DropdownProps = {

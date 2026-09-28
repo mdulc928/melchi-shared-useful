@@ -18,7 +18,7 @@
 
 <div class={cc('flex flex-1 flex-col items-center justify-center gap-2', className)}>
 	<div
-		class={cc('animate-spin rounded-full border-primary border-t-transparent', sizeClasses[size])}
+		class={cc('border-primary animate-spin rounded-full border-t-transparent', sizeClasses[size])}
 	></div>
 	{#if text}
 		<p class="text-muted-foreground text-sm">{text}</p>

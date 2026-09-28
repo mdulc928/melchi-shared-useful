@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { cc } from '$lib/utils';
-	import { focusClasses } from '../dashboard/things/constants';
+	import { focusClasses } from './constants';
 
 	let {
 		class: className = '',
@@ -15,7 +15,7 @@
 
 <input
 	class={cc(
-		'w-full rounded-xl border border-border bg-bg p-2 text-fg placeholder:text-gray-500/90',
+		'border-border bg-bg text-fg w-full rounded-xl border p-2 placeholder:text-gray-500/90',
 		focusClasses,
 		className
 	)}
