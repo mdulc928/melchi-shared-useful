@@ -1,13 +1,20 @@
 node_modules
+**/node_modules
 
 # Output
 .output
 .vercel
 .netlify
 .wrangler
-/.svelte-kit
+.svelte-kit
+**/.svelte-kit
 /build
+**/build
 /dist
+**/dist
+/out
+**/out
+*.vsix
 
 # OS
 .DS_Store
@@ -22,5 +29,6 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
 # Playwright
 test-results
