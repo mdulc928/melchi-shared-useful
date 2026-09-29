@@ -247,8 +247,19 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// Command: Open Settings
-	const openSettingsCmd = vscode.commands.registerCommand('gbts.openSettings', () => {
-		vscode.commands.executeCommand('workbench.action.openSettings', 'gbts');
+	const openSettingsCmd = vscode.commands.registerCommand('gbts.openSettings', async () => {
+		const query = 'gbts';
+		// Cursor freezes when this command is given a query: the renderer loops
+		// while serializing the reply. Opening with no argument does not.
+		// https://forum.cursor.com/t/workbench-action-opensettings-with-a-query-hangs-the-settings-page-in-cursor-works-in-vs-code/163463
+		if (vscode.env.appName === 'Cursor') {
+			await vscode.commands.executeCommand('workbench.action.openSettings');
+			await vscode.commands.executeCommand('settings.action.search');
+			vscode.window.setStatusBarMessage(`Filter settings with "${query}"`, 4000);
+			return;
+		}
+
+		await vscode.commands.executeCommand('workbench.action.openSettings', query);
 	});
 
 	// Command: Refresh
