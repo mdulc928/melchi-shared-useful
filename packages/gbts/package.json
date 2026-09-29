@@ -2,7 +2,7 @@
 	"name": "gbts",
 	"displayName": "Git Branch Tasks (GBTS)",
 	"description": "Track branch objectives and automated code TODO comments per Git branch.",
-	"version": "0.5.4",
+	"version": "0.5.5",
 	"publisher": "antigravity",
 	"engines": {
 		"vscode": "^1.85.0"
