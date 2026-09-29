@@ -38,10 +38,20 @@ Like plans live under `~/.cursor/plans/`, staged sources live under:
 
 **Conversation id:** UUID from the current agent store (`.../cursor_agent_stores/<conversation-id>/files`) or agent transcript folder. Do not invent one.
 
+## Absolute paths only (critical)
+
+The Write/StrReplace tool path must be a **full absolute path** starting with `/Users/.../.local/share/cursor-artifact-staging/`.
+
+- **Correct:** `/Users/<you>/.local/share/cursor-artifact-staging/<conversation-id>/staging/src/foo.ts`
+- **Wrong:** `.local/share/cursor-artifact-staging/...` (creates `./.local` inside the git repo and triggers external-file prompts)
+- **Wrong:** `~/.local/...` if the tool resolves it relative to the workspace
+
+Expand `~` to the real home directory before writing.
+
 ## Hard rules
 
 1. **Read** workspace files with read tools only.
-2. **Write and edit** only paths under `~/.local/share/cursor-artifact-staging/<conversation-id>/staging/<workspace-relative-path>`.
+2. **Write and edit** only absolute paths under `~/.local/share/cursor-artifact-staging/<conversation-id>/staging/<workspace-relative-path>`.
 3. **Never** create, modify, or delete files inside the workspace repo for this task — including after the user approves the approach in chat. Approval of the *idea* is not permission to write the repo.
 4. **Never** call SwitchMode to Plan (or suggest Plan mode) as part of this workflow.
 5. **Never** run `staged-diff-cursor apply` or copy staged files into the workspace unless the user clearly asks to apply (e.g. "apply staged changes", "copy staging to the repo", "run apply all").

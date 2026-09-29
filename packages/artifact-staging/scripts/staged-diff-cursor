@@ -9,14 +9,22 @@ diffs with `cursor -r --diff`. Does not modify scripts/staged-diff.
 import json
 import os
 import re
+import subprocess
 import sys
 
 HOME = os.path.expanduser("~")
 HERE = os.path.dirname(os.path.realpath(__file__))
 SOURCE = os.path.join(HERE, "staged-diff")
 STAGING_ROOT = os.path.realpath(os.path.join(HOME, ".local", "share", "cursor-artifact-staging"))
+LEGACY_STAGING_ROOTS = (
+    os.path.realpath(os.path.join(HOME, ".cursor", "artifact-staging")),
+)
 AUTORUN_STAGING_INSTRUCTION = (
     "Creating or editing files under ~/.local/share/cursor-artifact-staging for artifact-first staging."
+)
+AUTORUN_ABSOLUTE_PATH_INSTRUCTION = (
+    f"For artifact-first staging, use absolute paths under {STAGING_ROOT}/ only; "
+    "never workspace-relative paths like .local/ or ./.local/."
 )
 
 def _load_json_file(path):
@@ -38,18 +46,46 @@ def _realpath_strings(paths):
             out.append(os.path.realpath(os.path.expanduser(entry.strip())))
     return out
 
+def normalize_sandbox_readwrite_paths(existing_paths, staging_path):
+    staging_path = os.path.realpath(staging_path)
+    legacy = set(LEGACY_STAGING_ROOTS)
+    paths = [p for p in _realpath_strings(existing_paths) if p not in legacy]
+    if staging_path not in paths:
+        paths.append(staging_path)
+    return sorted(set(paths))
+
 def install_sandbox_write_allowlist(staging_path):
     sandbox_file = os.path.join(HOME, ".cursor", "sandbox.json")
-    data = _load_json_file(sandbox_file)
+    existing = _load_json_file(sandbox_file)
+    before = normalize_sandbox_readwrite_paths(existing.get("additionalReadwritePaths") or [], staging_path)
+    data = existing or {}
     data.setdefault("type", "workspace_readwrite")
-    paths = _realpath_strings(data.get("additionalReadwritePaths") or [])
-    staging_path = os.path.realpath(staging_path)
-    if staging_path in paths:
-        return False, sandbox_file
-    paths.append(staging_path)
-    data["additionalReadwritePaths"] = sorted(set(paths))
+    data["additionalReadwritePaths"] = before
+    changed = before != _realpath_strings(existing.get("additionalReadwritePaths") or [])
     _write_json_file(sandbox_file, data)
-    return True, sandbox_file
+    return changed, sandbox_file
+
+def install_repo_sandbox_write_allowlist(staging_path):
+    try:
+        res = subprocess.run(
+            ["git", "-C", os.getcwd(), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        repo_root = res.stdout.strip()
+    except Exception:
+        return False, None
+
+    sandbox_file = os.path.join(repo_root, ".cursor", "sandbox.json")
+    existing = _load_json_file(sandbox_file)
+    before = normalize_sandbox_readwrite_paths(existing.get("additionalReadwritePaths") or [], staging_path)
+    data = existing or {}
+    data.setdefault("type", "workspace_readwrite")
+    data["additionalReadwritePaths"] = before
+    changed = before != _realpath_strings(existing.get("additionalReadwritePaths") or [])
+    _write_json_file(sandbox_file, data)
+    return changed, sandbox_file
 
 def install_cli_write_allowlist(staging_path):
     cli_config = os.path.join(HOME, ".cursor", "cli-config.json")
@@ -72,13 +108,16 @@ def install_autorun_steering():
     data = _load_json_file(permissions_file)
     auto_run = data.setdefault("autoRun", {})
     allow = list(auto_run.get("allow_instructions") or [])
-    if AUTORUN_STAGING_INSTRUCTION in allow:
-        return False, permissions_file
-    allow.append(AUTORUN_STAGING_INSTRUCTION)
+    changed = False
+    for instruction in (AUTORUN_STAGING_INSTRUCTION, AUTORUN_ABSOLUTE_PATH_INSTRUCTION):
+        if instruction not in allow:
+            allow.append(instruction)
+            changed = True
     auto_run["allow_instructions"] = allow
     data["autoRun"] = auto_run
-    _write_json_file(permissions_file, data)
-    return True, permissions_file
+    if changed:
+        _write_json_file(permissions_file, data)
+    return changed, permissions_file
 
 def confirm_autorun_steering(assume_yes):
     print("\nAuto-review can still prompt on shell/MCP calls.")
@@ -106,11 +145,13 @@ def print_sandbox_vs_approvals_note():
     )
 
 def confirm_sandbox_write_path(staging_path, assume_yes):
-    print(f"\nStaging writes go to:\n  {staging_path}\n")
-    print("Add this directory to ~/.cursor/sandbox.json → additionalReadwritePaths")
-    print("(merged with <repo>/.cursor/sandbox.json when present). Keep type workspace_readwrite.")
+    print(f"\nStaging writes go to:\n  {staging_path}/\n")
+    print("All files under that directory are included (per conversation: .../<id>/staging/...).")
+    print("Add this root to ~/.cursor/sandbox.json → additionalReadwritePaths")
+    print("(and <repo>/.cursor/sandbox.json when you run install from a git repo). Keep type workspace_readwrite.")
+    print("Agents must use this absolute path — never workspace-relative .local/ (that creates ./.local in the repo).")
     print("Optional for Cursor CLI only: permissions.allow Write(...) in ~/.cursor/cli-config.json\n")
-    print("This does not disable approval prompts. Those are configured separately in Cursor Settings.\n")
+    print("External-File Protection may still prompt once; sandbox.json does not replace that for Edit tools.\n")
     if assume_yes:
         return True
     if not sys.stdin.isatty():
@@ -255,6 +296,12 @@ def install_cursor_skill(assume_yes=False):
             print(f"Added Write({STAGING_ROOT}/**) to {cli_file} (CLI only)")
         elif os.path.isfile(cli_file):
             print(f"CLI Write rule already in {cli_file}")
+
+        added_repo, repo_sandbox = install_repo_sandbox_write_allowlist(STAGING_ROOT)
+        if added_repo and repo_sandbox:
+            print(f"Added staging path to {repo_sandbox}")
+        elif repo_sandbox:
+            print(f"Staging path already in {repo_sandbox}")
 
         print_sandbox_vs_approvals_note()
     else:

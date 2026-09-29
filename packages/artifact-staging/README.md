@@ -101,6 +101,10 @@ Writing under `~/.local/share/cursor-artifact-staging` and skipping approval pro
 
 After editing `sandbox.json`, **start a new agent session** so the terminal sandbox reloads it. File-edit tools may pick up the path sooner; a sandboxed `mkdir` in the terminal can still fail until the session reloads.
 
+List only the **staging root** in `additionalReadwritePaths` (e.g. `.../cursor-artifact-staging`). Everything under that directory is allowed. Run `staged-diff-cursor --install-cursor-skill` from a git repo to merge the same path into `<repo>/.cursor/sandbox.json`.
+
+**If approval asks to write `./.local`:** the agent used a workspace-relative path. Staging must use the absolute home path above, not `.local/...` in the repo.
+
 **Approval prompts** — **Cursor Settings → Agents → Approvals & Execution** (see [permissions.json](https://cursor.com/docs/reference/permissions) for file-based allowlists):
 
 | Mode | Behavior |
