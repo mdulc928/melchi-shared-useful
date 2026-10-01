@@ -87,21 +87,30 @@ def install_repo_sandbox_write_allowlist(staging_path):
     _write_json_file(sandbox_file, data)
     return changed, sandbox_file
 
-def install_cli_write_allowlist(staging_path):
+def install_cli_file_allowlist(staging_path):
+    """Allow Cursor CLI to read and write the staging tree.
+
+    Tokens follow https://cursor.com/docs/cli/reference/permissions.
+    Write covers creating and editing files; Read covers reads.
+    """
     cli_config = os.path.join(HOME, ".cursor", "cli-config.json")
     staging_path = os.path.realpath(staging_path)
-    pattern = f"Write({staging_path}/**)"
+    patterns = [
+        f"Read({staging_path}/**)",
+        f"Write({staging_path}/**)",
+    ]
     data = _load_json_file(cli_config)
     if not data:
         data = {"version": 1, "permissions": {"allow": [], "deny": []}}
     perms = data.setdefault("permissions", {})
     allow = list(perms.get("allow") or [])
-    if pattern in allow:
-        return False, cli_config
-    allow.append(pattern)
+    added = [pattern for pattern in patterns if pattern not in allow]
+    if not added:
+        return False, cli_config, added
+    allow.extend(added)
     perms["allow"] = allow
     _write_json_file(cli_config, data)
-    return True, cli_config
+    return True, cli_config, added
 
 def install_autorun_steering():
     permissions_file = os.path.join(HOME, ".cursor", "permissions.json")
@@ -150,7 +159,8 @@ def confirm_sandbox_write_path(staging_path, assume_yes):
     print("Add this root to ~/.cursor/sandbox.json → additionalReadwritePaths")
     print("(and <repo>/.cursor/sandbox.json when you run install from a git repo). Keep type workspace_readwrite.")
     print("Agents must use this absolute path — never workspace-relative .local/ (that creates ./.local in the repo).")
-    print("Optional for Cursor CLI only: permissions.allow Write(...) in ~/.cursor/cli-config.json\n")
+    print("Optional for Cursor CLI only: permissions.allow Read(...) and Write(...) in ~/.cursor/cli-config.json")
+    print("(https://cursor.com/docs/cli/reference/permissions — Write covers creating files).\n")
     print("External-File Protection may still prompt once; sandbox.json does not replace that for Edit tools.\n")
     if assume_yes:
         return True
@@ -291,11 +301,11 @@ def install_cursor_skill(assume_yes=False):
         else:
             print(f"Staging path already in {sandbox_file}")
 
-        added_cli, cli_file = install_cli_write_allowlist(STAGING_ROOT)
+        added_cli, cli_file, added_patterns = install_cli_file_allowlist(STAGING_ROOT)
         if added_cli:
-            print(f"Added Write({STAGING_ROOT}/**) to {cli_file} (CLI only)")
+            print(f"Added {', '.join(added_patterns)} to {cli_file} (CLI only)")
         elif os.path.isfile(cli_file):
-            print(f"CLI Write rule already in {cli_file}")
+            print(f"CLI Read and Write rules already in {cli_file}")
 
         added_repo, repo_sandbox = install_repo_sandbox_write_allowlist(STAGING_ROOT)
         if added_repo and repo_sandbox:

@@ -21,6 +21,8 @@ Do not create a git worktree. Do not paste markdown diff blocks instead of writi
 
 **Prompts:** approval cards are separate (Cursor Settings → Agents → Approvals & Execution). `sandbox.json` does not turn prompts off. `permissions.json` `autoRun.allow_instructions` only steers Auto-review; it does not grant write access.
 
+**Cursor CLI:** [CLI permissions](https://cursor.com/docs/cli/reference/permissions) in `~/.cursor/cli-config.json` need both `Read(/Users/<you>/.local/share/cursor-artifact-staging/**)` and `Write(.../**)`. `Write` covers creating and editing files. `staged-diff-cursor --install-cursor-skill` adds both.
+
 If writes fail, suggest `staged-diff-cursor --install-cursor-skill` to add the sandbox path — not Plan mode, not disabling the sandbox for one command unless the user chooses that on the card.
 
 ## Staging root

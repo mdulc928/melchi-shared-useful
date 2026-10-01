@@ -78,7 +78,7 @@ To install the Cursor skill and configure the sandbox write path:
 staged-diff-cursor --install-cursor-skill
 ```
 
-That symlinks the skill into `~/.cursor/skills/artifact-first-staging`, creates `~/.local/share/cursor-artifact-staging`, and asks whether to add that path to `~/.cursor/sandbox.json` (plus optional CLI `Write(...)` in `~/.cursor/cli-config.json`). It also asks whether to append an `autoRun.allow_instructions` hint to `~/.cursor/permissions.json` for Auto-review. Use `--yes` to apply both without prompting.
+That symlinks the skill into `~/.cursor/skills/artifact-first-staging`, creates `~/.local/share/cursor-artifact-staging`, and asks whether to add that path to `~/.cursor/sandbox.json` (plus optional CLI `Read(...)` and `Write(...)` in `~/.cursor/cli-config.json`). It also asks whether to append an `autoRun.allow_instructions` hint to `~/.cursor/permissions.json` for Auto-review. Use `--yes` to apply both without prompting.
 
 For Cursor, use `staged-diff-cursor` anywhere the examples above say `staged-diff`.
 
@@ -114,6 +114,19 @@ List only the **staging root** in `additionalReadwritePaths` (e.g. `.../cursor-a
 | **Run Everything** | No prompts; the sandbox is not what protects those runs. |
 
 A card that offers to **disable the sandbox for one command** is not the same as adding a write path. Prefer keeping the command inside the sandbox via `additionalReadwritePaths`.
+
+**Cursor CLI file access** — [`~/.cursor/cli-config.json`](https://cursor.com/docs/cli/reference/permissions) `permissions.allow` (project override: `<project>/.cursor/cli.json`). `Write` covers creating and editing files; `Read` covers reads. These tokens are separate from `sandbox.json` and from `permissions.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Read(/Users/you/.local/share/cursor-artifact-staging/**)",
+      "Write(/Users/you/.local/share/cursor-artifact-staging/**)"
+    ]
+  }
+}
+```
 
 Optional: steer Auto-review with `autoRun.allow_instructions` in `~/.cursor/permissions.json`. That only hints the classifier; it does **not** grant filesystem access.
 
