@@ -1,0 +1,86 @@
+#compdef staged stage
+
+_staged() {
+    local -a commands files apply_options clean_options session_options diff_options
+    local line
+
+    if (( CURRENT == 2 )); then
+        commands=(
+            'diff:Inspect side-by-side diffs or apply staged changes'
+            'apply:Copy staged file(s) into the workspace'
+            'clean:Delete staged files for this session'
+            'path:Print absolute path of staged or workspace file'
+            'use:Set active session or tool for current shell'
+            'set:Configure default tool or session'
+            'rename:Rename a staged file and record mapping'
+            'migrate:Copy staged changes between sessions'
+            'install-skill:Install /stage skill for IDE'
+            '--help:Show help message'
+            '-h:Show help message'
+            '--sessions:List staging sessions for this repository'
+            '-R:List staging sessions across repositories'
+            '--all-repos:List staging sessions across repositories'
+            '-v:Show full absolute paths'
+            '--verbose:Show full absolute paths'
+            '--install-completion:Link zsh tab completion into ~/.zfunc'
+        )
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && commands+=("$line")
+        done < <(staged --complete 2>/dev/null)
+        _describe -t commands 'staged' commands
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "diff" ]]; then
+        diff_options=(
+            'all:Open diffs for all modified files'
+            '--between:Compare file between two conversation sessions'
+            '-a:Apply staged changes'
+            '--apply:Apply staged changes'
+        )
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged --list 2>/dev/null)
+        _describe -t options 'diff options' diff_options
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "apply" ]]; then
+        apply_options=(
+            '-f:Specify staged file to apply'
+            '--file:Specify staged file to apply'
+            'all:Apply all staged files and remove obsolete files'
+            '--force:Bypass branch protection'
+        )
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged --list 2>/dev/null)
+        _describe -t options 'apply options' apply_options
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "apply" ]] && [[ "${words[3]}" == "-f" || "${words[3]}" == "--file" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged --list 2>/dev/null)
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "clean" ]]; then
+        clean_options=(
+            '-f:Specify single staged file to delete'
+            '--file:Specify single staged file to delete'
+            '-y:Bypass confirmation prompt'
+            '--yes:Bypass confirmation prompt'
+        )
+        _describe -t options 'clean options' clean_options
+    elif (( CURRENT == 4 )) && [[ "${words[2]}" == "clean" ]] && [[ "${words[3]}" == "-f" || "${words[3]}" == "--file" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged --list 2>/dev/null)
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "path" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && files+=("$line")
+        done < <(staged --list 2>/dev/null)
+        _describe -t files 'staged files' files
+    elif (( CURRENT == 3 )) && [[ "${words[2]}" == "-s" || "${words[2]}" == "--session" || "${words[2]}" == "use" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && session_options+=("$line")
+        done < <(staged --complete-sessions 2>/dev/null)
+        _describe -t sessions 'available sessions' session_options
+    fi
+}
+
+_staged "$@"

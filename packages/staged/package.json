@@ -1,0 +1,24 @@
+{
+	"name": "@melchi/staged",
+	"version": "2.0.0",
+	"description": "Unified staging engine and /stage skill for AI agents across Cursor, Antigravity, Windsurf, VS Code, JetBrains, Zed, and CLI",
+	"type": "module",
+	"bin": {
+		"staged": "./scripts/staged",
+		"stage": "./scripts/staged",
+		"staged-diff": "./scripts/staged",
+		"staged-diff-cursor": "./scripts/staged"
+	},
+	"scripts": {
+		"test": "python3 -m py_compile scripts/staged"
+	},
+	"files": [
+		"SKILL.md",
+		"skills/cursor/SKILL.md",
+		"scripts/staged",
+		"completions/_staged",
+		"completions/_staged-diff",
+		"README.md",
+		"SPEC.md"
+	]
+}

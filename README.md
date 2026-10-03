@@ -4,12 +4,12 @@ A centralized npm workspaces monorepo containing shared tools, developer workflo
 
 ## Workspaces Overview
 
-| Package                                                   | Directory                                                | Description                                                                                                                             |
-| :-------------------------------------------------------- | :------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
-| **[@melchi/design-system](packages/design-system)**       | [`packages/design-system`](packages/design-system)       | Svelte 5 / SvelteKit UI component library, design system tokens, and client utilities.                                                  |
-| **[gbts](packages/gbts)**                                 | [`packages/gbts`](packages/gbts)                         | Git Branch Tasks (GBTS) — VS Code and Antigravity IDE extension for tracking branch objectives and TODO comments.                       |
-| **[@melchi/git-worktrees](packages/git-worktrees)**       | [`packages/git-worktrees`](packages/git-worktrees)       | Fast, isolated Git worktree workspace manager (`gitmkwt`/`gmw`, `gitResetDummy`/`grd`, `goto`, `gotoc`, `gwl`) with zsh autocompletion. |
-| **[@melchi/artifact-staging](packages/artifact-staging)** | [`packages/artifact-staging`](packages/artifact-staging) | Artifact-first staging for Cursor and Antigravity, with `staged-diff` and `staged-diff-cursor`.                                        |
+| Package                                             | Directory                                          | Description                                                                                                                             |
+| :-------------------------------------------------- | :------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
+| **[@melchi/design-system](packages/design-system)** | [`packages/design-system`](packages/design-system) | Svelte 5 / SvelteKit UI component library, design system tokens, and client utilities.                                                  |
+| **[gbts](packages/gbts)**                           | [`packages/gbts`](packages/gbts)                   | Git Branch Tasks (GBTS) — VS Code and Antigravity IDE extension for tracking branch objectives and TODO comments.                       |
+| **[@melchi/git-worktrees](packages/git-worktrees)** | [`packages/git-worktrees`](packages/git-worktrees) | Fast, isolated Git worktree workspace manager (`gitmkwt`/`gmw`, `gitResetDummy`/`grd`, `goto`, `gotoc`, `gwl`) with zsh autocompletion. |
+| **[@melchi/staged](packages/staged)**               | [`packages/staged`](packages/staged)               | Unified staging engine and `/stage` skill for AI agents across Cursor, Antigravity, Windsurf, VS Code, JetBrains, Zed, and CLI.         |
 
 ---
 
@@ -32,7 +32,7 @@ npm run build
 ### Run Tests Across Workspaces
 
 ```bash
-npm test
+npm run test
 ```
 
 ### Format Code

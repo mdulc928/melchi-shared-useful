@@ -1,0 +1,11 @@
+#compdef staged-diff
+
+_staged-diff() {
+    _staged "$@"
+}
+
+(( $+functions[_staged] )) || {
+    autoload -Uz _staged
+}
+
+_staged-diff "$@"
